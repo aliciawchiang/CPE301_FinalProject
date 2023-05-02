@@ -14,7 +14,7 @@ Design Requirement of Swamp Cooler
 
 • Water level monitoring
 
-• Vent direction control with stepper motor.
+• Vent direction control with stepper motor
 
 • LCD display
 
