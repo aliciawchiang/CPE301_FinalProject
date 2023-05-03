@@ -1,14 +1,17 @@
+
 //DHT Temp, humidity
-#include <DHT.h>
-#include <DHT_U.h>
-#define DHT11_PIN 22
-DHT dht(DHT11_PIN, DHT11);
+#include "Adafruit_Sensor.h"
+#include "DHT.h"
+#define DHTPIN 44
+#define DHTTYPE DHT11
+DHT dht(DHTPIN, DHTTYPE);
 
 //LCD
-#include <Adafruit_Sensor.h>
+
 #include <LiquidCrystal.h>
-LiquidCrystal lcd(rs, en, d4, d5, d6, d7);
 const int rs = 7, en = 6, d4 = 5, d5 = 4, d6 = 3, d7 = 2;
+LiquidCrystal lcd(rs, en, d4, d5, d6, d7);
+
 
 //Stepper
 #include <Stepper.h>
@@ -34,85 +37,96 @@ volatile unsigned char* port_d = (unsigned char*) 0x2B;
 volatile unsigned char* ddr_d  = (unsigned char*) 0x2A; 
 volatile unsigned char* pin_d  = (unsigned char*) 0x29; 
 
+// Define Port A Register Pointers for fan 
+volatile unsigned char* port_a = (unsigned char*) 0x22; 
+volatile unsigned char* ddr_a  = (unsigned char*) 0x21; 
+volatile unsigned char* pin_a  = (unsigned char*) 0x20; 
+
+
 
 void setup() {
   // put your setup code here, to run once:
+  U0init(9600);
+  Serial.begin(9600);
   stepper.setSpeed(200);
   lcd.begin(16,2);
-  U0init(9600);
-
-  rtc.begin(); // Initialize the RTC module
-  setTime(0); // Set the time to 00:00:00
+  dht.begin();
+  //rtc.begin(); // Initialize the RTC module
+  //setTime(0); // Set the time to 00:00:00
 }
 
-//declare function before called in loop
-int printTempHumidity();
-
 void loop() {
+
+  delay(2000);
+
   //D0 = BLUE, D1 = RED, D2 = GREEN, D3 = YELLOW
   //set D0, D1, D2, D3 to output
   *ddr_d |= 0xFF;
   //turn on BLUE led to show system is running
-  *port_d |= 0b00000001;
+  
+
+  //set port for fan to output
+  *ddr_a |= 0xFF;
+  *port_a |= 0b00000001;
 
   //Stepper motor
   int currentPos = analogRead(0); //changes the direction of the stepper
   stepper.step(currentPos - previousPos);
   int previousPos = currentPos;
 
-  unsigned char cs1;
-  while (U0kbhit()==0){};
-
-  dht.begin();
+  //unsigned char cs1;
+  //while (U0kbhit()==0){};
   
-  //compare current Temp to threshold 
-  int thresholdTemp = 70; //could be a macro?
-  int currentTemp = printTempHumidity();
-  if(currentTemp < thresholdTemp){ 
-    //go into idle, yellow LED
-  }
+  float thresholdTemp = 70; //could be a macro?
 
-  //compare current water level to threshold
-  int thresholdWater = 100;
-  int sensorValue = analogRead(sensorPin); // read the sensor value
-  if (sensorValue < thresholdWater) { // water level is below threshold
-    // perform actions, e.g. turn on pump
-  } else { // water level is above threshold
-    // perform actions, e.g. turn off pump
+  //compare current Temp to threshold 
+  float currentTemp = printTempHumidity();
+  
+  if(currentTemp < thresholdTemp){ 
+    *port_d |= 0b00000100;
+  }
+  else{
+    *port_d |= 0b00000001;
   }
 
   // Report an event every hour
-  if (minute() == 0 && second() == 0) {
+ /* if (minute() == 0 && second() == 0) {
     Serial.print("Event reported at ");
     Serial.print(hour(now()));
     Serial.print(":");
     Serial.print(minute(now()));
     Serial.print(":");
     Serial.println(second(now()));
-  }
+  }*/
+
 }
+  
 
 //LCD monitor function
-int printTempHumidity(){
-  float sensorTemp = dht.readTemperature(DHT11_PIN); //reads sensor data and converts temperature to Farenheit
-  float sensorHumidity = dht.readHumidity(DHT11_PIN)
-  int farenheit = sensorTemp.convertCtoF;
+float printTempHumidity(){
 
+  float h = dht.readHumidity();
+  float f = dht.readTemperature(true);
+
+  if (isnan(h) || isnan(f)) {
+    Serial.println(F("Failed to read from DHT sensor!"));
+    return;
+  }
+
+  lcd.clear();
   lcd.setCursor(0,0); //prints temperature on first line
   lcd.print("Temp: ");
-  lcd.print(farenheit);
+  lcd.print(f);
   lcd.print((char) 223);
   lcd.print("F");
 
   lcd.setCursor(0,1); //prints humidity on the second line
   lcd.print("Humidity: ");
-  lcd.print(sensorHumidity);
+  lcd.print(h);
   lcd.print("%");
 
-  return farenheit;
+  return f;
 }
-
-
 
 
 //
