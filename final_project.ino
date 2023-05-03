@@ -62,12 +62,23 @@ void loop() {
 
   unsigned char cs1;
   while (U0kbhit()==0){};
-  
-  int thresholdTemp = 70; //could be a macro?
 
+  dht.begin();
+  
   //compare current Temp to threshold 
+  int thresholdTemp = 70; //could be a macro?
   int currentTemp = printTempHumidity();
   if(currentTemp < thresholdTemp){ 
+    //go into idle, yellow LED
+  }
+
+  //compare current water level to threshold
+  int thresholdWater = 100;
+  int sensorValue = analogRead(sensorPin); // read the sensor value
+  if (sensorValue < thresholdWater) { // water level is below threshold
+    // perform actions, e.g. turn on pump
+  } else { // water level is above threshold
+    // perform actions, e.g. turn off pump
   }
 
   // Report an event every hour
@@ -83,8 +94,9 @@ void loop() {
 
 //LCD monitor function
 int printTempHumidity(){
-  float sensorData = dht.read(DHT11_PIN); //reads sensor data and converts temperature to Farenheit
-  int farenheit = sensorData * 9/5 + 32;
+  float sensorTemp = dht.readTemperature(DHT11_PIN); //reads sensor data and converts temperature to Farenheit
+  float sensorHumidity = dht.readHumidity(DHT11_PIN)
+  int farenheit = sensorTemp.convertCtoF;
 
   lcd.setCursor(0,0); //prints temperature on first line
   lcd.print("Temp: ");
@@ -94,7 +106,7 @@ int printTempHumidity(){
 
   lcd.setCursor(0,1); //prints humidity on the second line
   lcd.print("Humidity: ");
-  lcd.print(sensorData);
+  lcd.print(sensorHumidity);
   lcd.print("%");
 
   return farenheit;
