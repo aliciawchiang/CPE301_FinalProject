@@ -45,6 +45,12 @@ volatile unsigned char* port_a = (unsigned char*) 0x22;
 volatile unsigned char* ddr_a  = (unsigned char*) 0x21; 
 volatile unsigned char* pin_a  = (unsigned char*) 0x20; 
 
+//Define Port F Register Pointers for Analog
+volatile unsigned char* port_f = (unsigned char*) 0x31; 
+volatile unsigned char* ddr_f  = (unsigned char*) 0x30; 
+volatile unsigned char* pin_f  = (unsigned char*) 0x2F;
+
+
 //my_delay Timer Pointers
 volatile unsigned char *myTCCR1A = (unsigned char *) 0x80;
 volatile unsigned char *myTCCR1B = (unsigned char *) 0x81;
@@ -62,9 +68,11 @@ float thresholdWater = 100;
 void setup() {
   //Interrupt
   //set PB4 to output
-  *portDDRB |= 0b00001000;
+  *portDDRB |= 0b11110000;
   //set PB4 LOW
-  *portB &= 0b11110111;
+  *portB &= 0b11101111;
+
+  *ddr_f |= 0b00100001;
   //setup the Timer for Normal Mode, with the TOV interrupt enabled
   setup_timer_regs();
   //Start the UART
@@ -158,13 +166,12 @@ void loop(){
       }
     }
   }
-  my_delay(2000);
   
-  //set port for fan to output
-  *ddr_a |= 0xFF;
+  //set ports for fan on
+  *portB |= 0b10100000;
   
   //Stepper motor
-  int currentPos = analogRead(0); //changes the direction of the stepper
+  int currentPos = *port_f |= 0b00000001; //changes the direction of the stepper
   reportTransition();
   stepper.step(currentPos - previousPos);
   int previousPos = currentPos;
@@ -295,8 +302,8 @@ ISR(TIMER1_OVF_vect){
 
 //check water level
 unsigned int water_level() {
-  int sensorValue = digitalRead(WATER_LEVEL_PIN);
-  if (sensorValue == HIGH) {
+  int sensorValue = *port_f |= 0b00100000;
+  if (sensorValue == 0b00100000) {
     return 100; // water level is high
   } else {
     return 0; // water level is low
