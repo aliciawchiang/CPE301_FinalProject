@@ -27,18 +27,20 @@ int previousPos = 0;
 #include <RTClib.h>
 RTC_DS1307 rtc;
 
-//WATER
-//unsigned char WATER_LEVEL_PORT = 0;
-#define WATER_LEVEL_PIN 2 // digital pin connected to water level sensor
-
 //UART
 #define RDA 0x80
 #define TBE 0x20  
+
 volatile unsigned char *myUCSR0A = (unsigned char *)0x00C0;
 volatile unsigned char *myUCSR0B = (unsigned char *)0x00C1;
 volatile unsigned char *myUCSR0C = (unsigned char *)0x00C2;
 volatile unsigned int  *myUBRR0  = (unsigned int *) 0x00C4;
 volatile unsigned char *myUDR0   = (unsigned char *)0x00C6;
+
+volatile unsigned char* my_ADMUX = (unsigned char*) 0x7C;
+volatile unsigned char* my_ADCSRB = (unsigned char*) 0x7B;
+volatile unsigned char* my_ADCSRA = (unsigned char*) 0x7A;
+volatile unsigned int* my_ADC_DATA = (unsigned int*) 0x78;
 
 //Define Port A Register Pointers for LEDs 
 volatile unsigned char* port_a = (unsigned char*) 0x22; 
@@ -49,6 +51,11 @@ volatile unsigned char* pin_a  = (unsigned char*) 0x20;
 volatile unsigned char* port_f = (unsigned char*) 0x31; 
 volatile unsigned char* ddr_f  = (unsigned char*) 0x30; 
 volatile unsigned char* pin_f  = (unsigned char*) 0x2F;
+
+//Define Port H Register Pointers for Button
+volatile unsigned char* port_h = (unsigned char*) 0x102; 
+volatile unsigned char* ddr_h  = (unsigned char*) 0x101; 
+volatile unsigned char* pin_h  = (unsigned char*) 0x100;
 
 
 //my_delay Timer Pointers
@@ -63,7 +70,22 @@ volatile unsigned char *portB =    (unsigned char *) 0x25;
 
 //Threshold variables
 float thresholdTemp = 72;
-float thresholdWater = 100;
+float thresholdWater = 33;
+
+//interupt buttons
+const byte stopButtonPin = 18;
+const byte resetButtonPin = 19;
+
+// Flags depicting what state we are in.
+/*
+enum state{
+   disabled = 0,
+   idle = 1,
+   error = 2,
+   running = 3
+};*/
+
+volatile int stat = 3;
 
 void setup() {
   //Interrupt
@@ -71,18 +93,24 @@ void setup() {
   *portDDRB |= 0b11110000;
   //set PB4 LOW
   *portB &= 0b11101111;
+  //set analog ports to output
+  *ddr_f |= 0b00000001;
+  //set button port to output
+  *ddr_h |= 0b01000000;
 
-  *ddr_f |= 0b00100001;
+  attachInterrupt(digitalPinToInterrupt(stopButtonPin), stopButton, FALLING);
+  attachInterrupt(digitalPinToInterrupt(resetButtonPin), resetButton, FALLING);
+
   //setup the Timer for Normal Mode, with the TOV interrupt enabled
   setup_timer_regs();
   //Start the UART
   U0init(9600);
-
-  Serial.begin(9600);
+  // Serial.begin(9600); for testing
   stepper.setSpeed(200);
   lcd.begin(16,2);
   dht.begin();
-  running();
+  adc_init();
+  running_state();
 
   //CLOCK
   if (! rtc.begin()) {
@@ -103,95 +131,63 @@ void setup() {
 }
 
 byte in_char;
-//This array holds the tick values
-unsigned int ticks[16]= {440,440, 494, 494, 523, 523, 587, 587, 659, 659, 698, 698, 784, 784, 0, 0};
-//This array holds the characters to be entered, index echos the index of the ticks
-unsigned char input[16]= {'a', 'A', 'b', 'B', 'c', 'C', 'd', 'D', 'e', 'E', 'f', 'F', 'g', 'G', 'q', 'Q'};
 
 //global ticks counter
-int currentTicks = 0;
 int timer_running = 0;
 
 void loop(){
-  //check for temp, water level, if the shut off button is pressed
-  //if the temp falls below threshold, check water, check button
-  //running: all things about threshold
-  //idle: temp is below
-  //disable: button is pressed
-  //error: water is below
-
-  // if we recieve a character from serial
-  if (U0kbhit()){
-    // read the character
-    in_char = U0getChar();
-    // echo it back
-    U0putChar(in_char);
-    // if it's the quit character
-    if(in_char == 'q' || in_char == 'Q'){
-      // set the current ticks to the max value
-      currentTicks = 65535;
-      // if the timer is running
-      if(timer_running){
-        // stop the timer
-        *myTCCR1B &=  0xF8;
-        // set the flag to not running
-        timer_running = 0;
-        // set PB4 LOW
-        *portB &= 0b11110111;
-      }
-    }
-    // otherwise we need to look for the char in the array
-    else{
-      // look up the character
-      for(int i=0; i < 12; i++){
-        // if it's the character we received...
-        if(in_char == input[i]){
-          // set the ticks
-           double period = 1.0/double(ticks[i]);
-          // 50% duty cycle
-          double half_period = period/ 2.0f;
-          // clock period def
-          double clk_period = 0.0000000625;
-          // calc ticks
-          unsigned int t = half_period / clk_period;
-          currentTicks = t;
-          // if the timer is not already running, start it
-          if(!timer_running){
-              // start the timer
-              *myTCCR1B |= 0b00000001;
-              // set the running flag
-              timer_running = 1;
-          }
-        }
-      }
-    }
-  }
-  
-  //set ports for fan on
-  *portB |= 0b10100000;
-  
-  //Stepper motor
-  int currentPos = *port_f |= 0b00000001; //changes the direction of the stepper
-  reportTransition();
-  stepper.step(currentPos - previousPos);
-  int previousPos = currentPos;
-
-  //compare current Temp to threshold 
-  float currentTemp = dht.readTemperature(true);
-  if(currentTemp < thresholdTemp || currentTemp == thresholdTemp){ 
-    reportTransition();
-    idle();
-  }
-  else{
-    reportTransition();
-    running(); 
-  }
 
   //UART
   unsigned char cs1;
   
   while (U0kbhit()==0){}; // wait for RDA = true
   cs1 = U0getChar();    // read character
+
+  //set ports for button to be read
+  *port_h |= 0b01000000;
+
+  //compare current Temp to threshold 
+  float currentTemp = dht.readTemperature(true);
+
+  if(water_level() > 0){
+      if(currentTemp == thresholdTemp){
+        //
+      }
+      else if(currentTemp < thresholdTemp || currentTemp == thresholdTemp){
+        stat = 1;
+      }
+      else{
+        stat = 3;
+      }
+  }
+  else{
+    stat = 2;
+  }
+  //state switch statement
+  switch(stat){
+    case 0:
+      reportTransition();
+      disabled_state();
+      
+      break;
+    case 1:
+      reportTransition();
+      idle_state();
+      stepperMotor();
+      break;
+    case 2:
+      reportTransition();
+      error_state();
+      stepperMotor();
+      break;
+    case 3:
+      reportTransition();
+      running_state();
+      stepperMotor();
+      break;
+    default:
+      break;
+  }
 }
 
 //FUNCTIONS!!!! 
@@ -220,31 +216,60 @@ void printTempHumidity(){
 }
 
 //PROGRAM STATES
-void running(){
+void running_state(){
+  //blue LED on
   *port_a |= 0b01000010;
   *port_a &= 0b01000010;
-  
+  //set ports for fan on
+  *portB |= 0b10100000;
   printTempHumidity();
+  //button #1 code to disable
 }
 
-void idle(){
+void idle_state(){
+  //green LED on
   *port_a |= 0b10000000;
   *port_a &= 0b10000000;
+  //set ports for fan off
+  *portB &= 0b01011111;
 }
 
-void disabled(){
+void disabled_state(){
+  //yellow LED on
   *port_a |= 0b00100000;
   *port_a &= 0b00100000;
+  //set ports for fan off
+  *portB &= 0b01011111;
+  //button #2 code to idle
 }
 
-void error(){
+void error_state(){
+  //red LED on
   *port_a |= 0b00001000;
   *port_a &= 0b00001000;
+  //set ports for fan off
+  *portB &= 0b01011111;
+  //LCD
   lcd.clear();
   lcd.setCursor(0,0);
   lcd.print("Error: Water level low");
+  //button #2 code to idle
+}
+void stopButton(){
+  stat = 0;
 }
 
+void resetButton(){
+  stat = 1;
+}
+
+void stepperMotor(){
+  //Stepper motor
+  int currentPos = adc_read(0); //changes the direction of the stepper
+  reportTransition();
+  stepper.step(currentPos - previousPos);
+  int previousPos = currentPos;
+}
 //RTC to serial monitor
 void reportTransition(){
   DateTime now = rtc.now();
@@ -289,25 +314,59 @@ ISR(TIMER1_OVF_vect){
 //Stop the Timer
   *myTCCR1B &= 0xF8;
   //Load the Count
-  *myTCNT1 =  (unsigned int) (65535 -  (unsigned long) (currentTicks));
+  //*myTCNT1 =  (unsigned int) (65535 -  (unsigned long) (currentTicks));
   //Start the Timer
   *myTCCR1B |= 0b00000001;
   //if it's not the STOP amount
-  if(currentTicks != 65535)
-  {
+  //if(currentTicks != 65535){
     //XOR to toggle PB6
-    *portB ^= 0x40;
-  }
+    //*portB ^= 0x40;
+  //}
 }
 
 //check water level
 unsigned int water_level() {
-  int sensorValue = *port_f |= 0b00100000;
-  if (sensorValue == 0b00100000) {
-    return 100; // water level is high
-  } else {
-    return 0; // water level is low
+  int sensorValue = adc_read(5);
+  //Serial.println(sensorValue); testing
+  return sensorValue;
+}
+
+void adc_init(){
+  // setup the A register
+  *my_ADCSRA |= 0b10000000; // set bit   7 to 1 to enable the ADC
+  *my_ADCSRA &= 0b11011111; // clear bit 6 to 0 to disable the ADC trigger mode
+  *my_ADCSRA &= 0b11110111; // clear bit 5 to 0 to disable the ADC interrupt
+  *my_ADCSRA &= 0b11111000; // clear bit 0-2 to 0 to set prescaler selection to slow reading
+  // setup the B register
+  *my_ADCSRB &= 0b11110111; // clear bit 3 to 0 to reset the channel and gain bits
+  *my_ADCSRB &= 0b11111000; // clear bit 2-0 to 0 to set free running mode
+  // setup the MUX Register
+  *my_ADMUX  &= 0b01111111; // clear bit 7 to 0 for AVCC analog reference
+  *my_ADMUX  |= 0b01000000; // set bit   6 to 1 for AVCC analog reference
+  *my_ADMUX  &= 0b11011111; // clear bit 5 to 0 for right adjust result
+  *my_ADMUX  &= 0b11100000; // clear bit 4-0 to 0 to reset the channel and gain bits
+}
+
+unsigned int adc_read(unsigned char adc_channel_num){
+  // clear the channel selection bits (MUX 4:0)
+  *my_ADMUX  &= 0b11100000;
+  // clear the channel selection bits (MUX 5)
+  *my_ADCSRB &= 0b11110111;
+  // set the channel number
+  if(adc_channel_num > 7){
+    // set the channel selection bits, but remove the most significant bit (bit 3)
+    adc_channel_num -= 8;
+    // set MUX bit 5
+    *my_ADCSRB |= 0b00001000;
   }
+  // set the channel selection bits
+  *my_ADMUX  += adc_channel_num;
+  // set bit 6 of ADCSRA to 1 to start a conversion
+  *my_ADCSRA |= 0x40;
+  // wait for the conversion to complete
+  while((*my_ADCSRA & 0x40) != 0);
+  // return the result in the ADC data register
+  return *my_ADC_DATA;
 }
 
 //UART FUNCTIONS
