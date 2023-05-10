@@ -52,11 +52,6 @@ volatile unsigned char* port_f = (unsigned char*) 0x31;
 volatile unsigned char* ddr_f  = (unsigned char*) 0x30; 
 volatile unsigned char* pin_f  = (unsigned char*) 0x2F;
 
-//Define Port H Register Pointers for Button
-volatile unsigned char* port_h = (unsigned char*) 0x102; 
-volatile unsigned char* ddr_h  = (unsigned char*) 0x101; 
-volatile unsigned char* pin_h  = (unsigned char*) 0x100;
-
 
 //my_delay Timer Pointers
 volatile unsigned char *myTCCR1A = (unsigned char *) 0x80;
@@ -69,23 +64,14 @@ volatile unsigned char *portDDRB = (unsigned char *) 0x24;
 volatile unsigned char *portB =    (unsigned char *) 0x25;
 
 //Threshold variables
-float thresholdTemp = 72;
+float thresholdTemp = 76.30;
 float thresholdWater = 33;
 
 //interupt buttons
 const byte stopButtonPin = 18;
 const byte resetButtonPin = 19;
 
-// Flags depicting what state we are in.
-/*
-enum state{
-   disabled = 0,
-   idle = 1,
-   error = 2,
-   running = 3
-};*/
-
-volatile int stat = 3;
+volatile bool stat;
 
 void setup() {
   //Interrupt
@@ -95,8 +81,6 @@ void setup() {
   *portB &= 0b11101111;
   //set analog ports to output
   *ddr_f |= 0b00000001;
-  //set button port to output
-  *ddr_h |= 0b01000000;
 
   attachInterrupt(digitalPinToInterrupt(stopButtonPin), stopButton, FALLING);
   attachInterrupt(digitalPinToInterrupt(resetButtonPin), resetButton, FALLING);
@@ -110,7 +94,6 @@ void setup() {
   lcd.begin(16,2);
   dht.begin();
   adc_init();
-  running_state();
 
   //CLOCK
   if (! rtc.begin()) {
@@ -130,64 +113,35 @@ void setup() {
   }
 }
 
-byte in_char;
-
 //global ticks counter
 int timer_running = 0;
 
 void loop(){
 
-  //UART
-  unsigned char cs1;
-  
-  while (U0kbhit()==0){}; // wait for RDA = true
-  cs1 = U0getChar();    // read character
-
-  //set ports for button to be read
-  *port_h |= 0b01000000;
-
-  //compare current Temp to threshold 
+  //get water sensor values and current temp
+  int sensorValue = adc_read(5);
   float currentTemp = dht.readTemperature(true);
 
-  if(water_level() > 0){
-      if(currentTemp == thresholdTemp){
-        //
-      }
-      else if(currentTemp < thresholdTemp || currentTemp == thresholdTemp){
-        stat = 1;
-      }
-      else{
-        stat = 3;
-      }
+  if(sensorValue < 100){
+    reportTransition();
+    error_state();
   }
   else{
-    stat = 2;
+    //checks if current temp is less than or equal to threshold
+      if(currentTemp <= thresholdTemp){
+          reportTransition();
+          idle_state();
+          stepperMotor();
+      }
+      else{
+          reportTransition();
+          running_state();
+          stepperMotor();
+      }
   }
-  //state switch statement
-  switch(stat){
-    case 0:
-      reportTransition();
-      disabled_state();
-      
-      break;
-    case 1:
-      reportTransition();
-      idle_state();
-      stepperMotor();
-      break;
-    case 2:
-      reportTransition();
-      error_state();
-      stepperMotor();
-      break;
-    case 3:
-      reportTransition();
-      running_state();
-      stepperMotor();
-      break;
-    default:
-      break;
-  }
+
+  my_delay(1000);
+
 }
 
 //FUNCTIONS!!!! 
@@ -213,6 +167,8 @@ void printTempHumidity(){
   lcd.print("Humidity: ");
   lcd.print(h);
   lcd.print("%");
+
+  my_delay(1000);
 }
 
 //PROGRAM STATES
@@ -223,7 +179,6 @@ void running_state(){
   //set ports for fan on
   *portB |= 0b10100000;
   printTempHumidity();
-  //button #1 code to disable
 }
 
 void idle_state(){
@@ -241,6 +196,9 @@ void disabled_state(){
   //set ports for fan off
   *portB &= 0b01011111;
   //button #2 code to idle
+  if(water_level() > 100){
+    stat = true;
+  }
 }
 
 void error_state(){
@@ -252,15 +210,26 @@ void error_state(){
   //LCD
   lcd.clear();
   lcd.setCursor(0,0);
-  lcd.print("Error: Water level low");
-  //button #2 code to idle
+  lcd.print("Error: ");
+  lcd.setCursor(0,1);
+  lcd.print("Water level low");
+
+  if(stat == false){
+    stat = true;
+  }
 }
+
 void stopButton(){
-  stat = 0;
+  if(digitalRead(stopButtonPin) == LOW){
+    stat = !stat;
+  }
+  
 }
 
 void resetButton(){
-  stat = 1;
+  if(digitalRead(resetButtonPin) == LOW){
+    stat = !stat;
+  }
 }
 
 void stepperMotor(){
@@ -281,6 +250,13 @@ void reportTransition(){
   U0putChar('\n');
 
   my_delay(1000);
+}
+
+//check water level
+unsigned int water_level() {
+  int sensorValue = adc_read(5);
+  my_delay(1000);
+  return sensorValue;
 }
 
 //my_delay
@@ -322,13 +298,6 @@ ISR(TIMER1_OVF_vect){
     //XOR to toggle PB6
     //*portB ^= 0x40;
   //}
-}
-
-//check water level
-unsigned int water_level() {
-  int sensorValue = adc_read(5);
-  //Serial.println(sensorValue); testing
-  return sensorValue;
 }
 
 void adc_init(){
